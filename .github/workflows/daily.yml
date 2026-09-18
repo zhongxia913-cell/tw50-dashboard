@@ -20,7 +20,12 @@ jobs:
 
       - uses: r-lib/actions/setup-r@v2
         with:
-          use-public-rspm: false   # 【更動一】改從 CRAN 安裝，避免 RSPM 來源記錄
+          use-public-rspm: false
+
+      - name: 設定 CRAN 鏡像（名稱與網址一致）
+        run: |
+          RPROFILE=$(Rscript -e 'cat(file.path(R.home("etc"), "Rprofile.site"))')
+          echo 'options(repos = c("https://cloud.r-project.org" = "https://cloud.r-project.org"))' | sudo tee -a "$RPROFILE"
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
@@ -51,7 +56,8 @@ jobs:
           TOK: ${{ secrets.SHINYAPPS_TOKEN }}
           SEC: ${{ secrets.SHINYAPPS_SECRET }}
         run: >
-          Rscript -e "options(repos = c(CRAN = 'https://cloud.r-project.org'));
+          Rscript -e "options(repos = c('https://cloud.r-project.org' = 'https://cloud.r-project.org'));
           rsconnect::setAccountInfo(Sys.getenv('ACC'),
           Sys.getenv('TOK'), Sys.getenv('SEC'));
-          rsconnect::deployApp('.', appName='tw50-dashboard', forceUpdate=TRUE)"
+          rsconnect::deployApp('.', appFiles = c('app.R', 'stock_daily.rds'),
+          appName='tw50-dashboard', forceUpdate=TRUE)"
