@@ -1,5 +1,5 @@
 # ============================================================================
-# 每日更新：只抓「最後日期+1 ~ 今天」的新資料，附加到 stock_daily.rds
+# 每日更新：只抓「最後日期+1 ~ 今天」的新資料，附加到 stock_daily.rds (含重試機制)
 # ============================================================================
 library(tidyquant); library(dplyr); library(tidyr)
 
@@ -18,19 +18,28 @@ if (file.exists(rds_file)) {
   last_date <- max(old$date)
 } else {
   old <- NULL
-  last_date <- as.Date("2016-01-01")   # 第一次跑：抓完整 10 年
+  last_date <- as.Date("2016-01-01")
 }
 
-new <- tq_get(tickers, get = "stock.prices",
-              from = last_date + 1, to = Sys.Date()) %>%
-  mutate(symbol = substr(symbol, 1, 4))
+# [P1 修正] 加入重試機制，避免 Yahoo 暫時斷線導致當日無資料
+new <- NULL
+for (i in 1:3) {
+  cat("嘗試第", i, "次抓取資料...\n")
+  new <- tryCatch(
+    tq_get(tickers, get = "stock.prices",
+           from = last_date + 1, to = Sys.Date()) %>%
+      mutate(symbol = substr(symbol, 1, 4)),
+    error = function(e) { cat("第", i, "次抓取失敗：", e$message, "\n"); NULL }
+  )
+  if (!is.null(new) && nrow(new) > 0) break
+  if (i < 3) Sys.sleep(30)
+}
 
 if (is.null(new) || nrow(new) == 0) {
-  cat(Sys.time(), "：無新交易日資料（週末/國定假日/颱風假），結束。\n")
-  quit(save = "no")                     # 正常結束，不算錯誤
+  cat(Sys.time(), "：無新交易日資料（週末/國定假日/颱風假），或抓取失敗，結束。\n")
+  quit(save = "no")
 }
 
-# 與資料清理相同的篩選邏輯
 new <- new %>%
   filter(!(is.na(open) & is.na(high) & is.na(low) & is.na(close))) %>%
   filter(!lubridate::wday(date) %in% c(1, 7)) %>%
