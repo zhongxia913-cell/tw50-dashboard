@@ -1,8 +1,12 @@
 name: daily-update
+
 on:
   schedule:
-    - cron: "0 11 * * 1-5"      # UTC 11:00 = 台灣時間 19:00（收盤後），週一~五
-  workflow_dispatch:             # 允許手動觸發
+    - cron: "0 11 * * 1-5"      # UTC 11:00 = 台灣時間 19:00，週一至週五
+  workflow_dispatch:            # 允許手動觸發
+
+permissions:                    # 【修正一】授予寫入權限，解決 403
+  contents: write
 
 jobs:
   update-and-deploy:
@@ -18,13 +22,17 @@ jobs:
       - name: 更新資料
         run: Rscript update_data.R
 
-      - name: 提交新資料
+      - name: 提交新資料          # 【修正二】僅在有變更時才 commit 與 push
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add stock_daily.rds
-          git commit -m "daily data update $(date +%F)" || echo "無新資料"
-          git push
+          if git diff --staged --quiet; then
+            echo "無新資料，跳過提交與推送。"
+          else
+            git commit -m "daily data update $(date +%F)"
+            git push
+          fi
 
       - name: 部署到 shinyapps.io
         env:
