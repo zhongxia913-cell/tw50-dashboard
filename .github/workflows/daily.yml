@@ -22,17 +22,30 @@ jobs:
         with:
           use-public-rspm: false
 
-      - name: 設定 CRAN 鏡像（名稱與網址一致）
-        run: |
-          RPROFILE=$(Rscript -e 'cat(file.path(R.home("etc"), "Rprofile.site"))')
-          echo 'options(repos = c("https://cloud.r-project.org" = "https://cloud.r-project.org"))' | sudo tee -a "$RPROFILE"
-
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           packages: any::shiny, any::shinydashboard, any::plotly, any::DT,
                     any::tidyquant, any::dplyr, any::tidyr, any::lubridate,
                     any::rsconnect, any::BH, any::cpp11, any::progress,
                     any::RcppArmadillo
+
+      - name: 改寫套件來源記錄為完整網址
+        run: |
+          Rscript -e '
+            url <- "https://cloud.r-project.org"
+            files <- list.files(.libPaths(), pattern = "DESCRIPTION$",
+                                recursive = TRUE, full.names = TRUE)
+            files <- files[grepl("/DESCRIPTION$", files)]
+            for (f in files) {
+              x <- readLines(f, warn = FALSE)
+              i <- grep("^Repository:", x)
+              if (length(i) == 1) {
+                x[i] <- paste("Repository:", url)
+                writeLines(x, f)
+              }
+            }
+            cat("已改寫 DESCRIPTION 檔案數：", length(files), "\n")
+          '
 
       - name: 更新資料
         run: Rscript update_data.R
