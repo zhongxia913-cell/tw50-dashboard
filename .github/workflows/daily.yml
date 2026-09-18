@@ -17,7 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: false   # 【更動一】改從 CRAN 安裝，避免 RSPM 來源記錄
+
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           packages: any::shiny, any::shinydashboard, any::plotly, any::DT,
@@ -47,6 +51,7 @@ jobs:
           TOK: ${{ secrets.SHINYAPPS_TOKEN }}
           SEC: ${{ secrets.SHINYAPPS_SECRET }}
         run: >
-          Rscript -e "rsconnect::setAccountInfo(Sys.getenv('ACC'),
+          Rscript -e "options(repos = c(CRAN = 'https://cloud.r-project.org'));
+          rsconnect::setAccountInfo(Sys.getenv('ACC'),
           Sys.getenv('TOK'), Sys.getenv('SEC'));
           rsconnect::deployApp('.', appName='tw50-dashboard', forceUpdate=TRUE)"
