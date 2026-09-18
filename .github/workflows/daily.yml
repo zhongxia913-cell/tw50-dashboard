@@ -5,8 +5,12 @@ on:
     - cron: "0 11 * * 1-5"      # UTC 11:00 = 台灣時間 19:00，週一至週五
   workflow_dispatch:            # 允許手動觸發
 
-permissions:                    # 【修正一】授予寫入權限，解決 403
+permissions:
   contents: write
+
+concurrency:                    # 防止多個流程同時執行而互相衝突
+  group: daily-update
+  cancel-in-progress: false
 
 jobs:
   update-and-deploy:
@@ -22,10 +26,11 @@ jobs:
       - name: 更新資料
         run: Rscript update_data.R
 
-      - name: 提交新資料          # 【修正二】僅在有變更時才 commit 與 push
+      - name: 提交新資料
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+          git pull --rebase origin main
           git add stock_daily.rds
           if git diff --staged --quiet; then
             echo "無新資料，跳過提交與推送。"
