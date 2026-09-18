@@ -1,5 +1,5 @@
 # ============================================================================
-# 0050 投資組合監控儀表板 (修正版：修復 NA 崩潰與 DT 格式問題)
+# 0050 投資組合監控儀表板 (終極優化版：修復0%Bug、新增個股查詢、標示截止日)
 # ============================================================================
 library(shiny); library(shinydashboard); library(dplyr); library(tidyr)
 library(plotly); library(DT); library(lubridate)
@@ -24,64 +24,93 @@ ui <- dashboardPage(
   dashboardSidebar(sidebarMenu(
     menuItem("市場總覽", tabName = "ov",  icon = icon("chart-line")),
     menuItem("個股監控", tabName = "stk", icon = icon("table")),
+    menuItem("個股走勢查詢", tabName = "pick_stk", icon = icon("search")), # [P2] 新增
     menuItem("資料明細", tabName = "raw", icon = icon("download"))
   )),
-  dashboardBody(tabItems(
-    tabItem("ov",
-      fluidRow(
-        valueBoxOutput("vb_price", 3), valueBoxOutput("vb_chg", 3),
-        valueBoxOutput("vb_up", 3),    valueBoxOutput("vb_ytd", 3)
+  dashboardBody(
+    # [P2] 明確標示資料截止日
+    fluidRow(
+      column(12, h4(textOutput("as_of", inline = TRUE), style = "text-align: right; color: gray; margin-bottom: 15px;"))
+    ),
+    tabItems(
+      tabItem("ov",
+        fluidRow(
+          valueBoxOutput("vb_price", 3), valueBoxOutput("vb_chg", 3),
+          valueBoxOutput("vb_up", 3),    valueBoxOutput("vb_ytd", 3)
+        ),
+        fluidRow(box(width = 12, status = "primary", solidHeader = TRUE,
+                     title = "0050 調整後收盤價走勢",
+                     plotlyOutput("p_price", height = 320))),
+        # [P2] 標題改為近一年
+        fluidRow(box(width = 6, title = "0050 近一年日報酬率", status = "primary",
+                     plotlyOutput("p_ret", height = 280)),
+                 box(width = 6, title = "近 20 日漲跌幅排行（前/後 10 名）",
+                     status = "primary", plotlyOutput("p_rank", height = 280)))
       ),
-      fluidRow(box(width = 12, status = "primary", solidHeader = TRUE,
-                   title = "0050 調整後收盤價走勢",
-                   plotlyOutput("p_price", height = 320))),
-      fluidRow(box(width = 6, title = "0050 日報酬率", status = "primary",
-                   plotlyOutput("p_ret", height = 280)),
-               box(width = 6, title = "近 20 日漲跌幅排行（前/後 10 名）",
-                   status = "primary", plotlyOutput("p_rank", height = 280)))
-    ),
-    tabItem("stk",
-      fluidRow(box(width = 12, title = "51 檔最新行情（依持股比例排序）",
-                   status = "primary", DTOutput("tbl")))
-    ),
-    tabItem("raw",
-      fluidRow(box(width = 12, title = "原始日資料",
-                   status = "primary",
-                   downloadButton("dl", "下載 CSV"), br(), br(),
-                   DTOutput("raw_tbl")))
+      tabItem("stk",
+        fluidRow(box(width = 12, title = "51 檔最新行情（依持股比例排序）",
+                     status = "primary", DTOutput("tbl")))
+      ),
+      # [P2] 個股走勢查詢頁面
+      tabItem("pick_stk",
+        fluidRow(
+          box(width = 4, status = "primary", title = "選擇個股",
+              selectInput("pick", NULL, choices = setNames(names(stock_names), paste(names(stock_names), stock_names)), selected = "0050"))
+        ),
+        fluidRow(
+          box(width = 12, status = "primary", title = "調整後收盤價走勢", plotlyOutput("p_pick_price", height = 300)),
+          box(width = 12, status = "primary", title = "近一年日報酬率", plotlyOutput("p_pick_ret", height = 300))
+        )
+      ),
+      tabItem("raw",
+        fluidRow(box(width = 12, title = "原始日資料",
+                     status = "primary",
+                     downloadButton("dl", "下載 CSV"), br(), br(),
+                     DTOutput("raw_tbl")))
+      )
     )
-  ))
+  )
 )
 
 server <- function(input, output, session) {
-
-  # 每小時自動重讀資料檔
+  
   raw <- reactiveFileReader(3600000, NULL, "stock_daily.rds", readRDS)
-
+  
   df <- reactive({
     req(raw())
     raw() %>% mutate(name = stock_names[symbol])
   })
+  
+  # [P2] 渲染資料截止日
+  output$as_of <- renderText({
+    req(nrow(df()) > 0)
+    paste("資料截止：", max(df()$date), "｜每交易日 19:00 自動更新")
+  })
 
-  # 各股最新一筆 + 前一筆（算漲跌）
+  # === [P0 修正] latest() 變數覆寫問題 ===
   latest <- reactive({
     req(nrow(df()) > 0)
     df() %>% arrange(symbol, date) %>% group_by(symbol, name) %>%
       summarise(
-        last_date = max(date),
-        close     = last(close),
-        prev      = nth(close, n() - 1),
-        volume    = last(volume),
-        adjusted  = last(adjusted),
-        adj_20    = nth(adjusted, max(n() - 20, 1)),
-        ret       = log(last(adjusted) / nth(adjusted, n() - 1)),
+        last_date  = max(date),
+        close_last = last(close),
+        close_prev = nth(close, n() - 1),
+        adj_last   = last(adjusted),
+        adj_prev   = nth(adjusted, n() - 1),
+        adj_20     = nth(adjusted, max(n() - 20, 1)),
+        volume     = last(volume),
         .groups   = "drop"
       ) %>%
-      mutate(chg_pct = (close / prev - 1) * 100,
-             ret20   = (adjusted / adj_20 - 1) * 100,
-             label   = paste(symbol, name))
+      mutate(
+        close    = close_last,
+        adjusted = adj_last,
+        chg_pct  = (close_last / close_prev - 1) * 100,
+        ret      = log(adj_last / adj_prev),
+        ret20    = (adj_last / adj_20 - 1) * 100,
+        label    = paste(symbol, name)
+      )
   })
-
+  
   etf <- reactive({
     req(nrow(df()) > 0)
     df() %>% filter(symbol == "0050") %>% arrange(date)
@@ -91,8 +120,8 @@ server <- function(input, output, session) {
     req(nrow(latest()) > 0)
     latest() %>% filter(symbol == "0050")
   })
-
-  # === KPI 卡片 (加入 NA 防呆機制) ===
+  
+  # === KPI 卡片 ([P0] 防呆改為顯示 — ) ===
   output$vb_price <- renderValueBox({
     req(nrow(l51()) > 0)
     price <- l51()$close
@@ -109,7 +138,9 @@ server <- function(input, output, session) {
   output$vb_chg <- renderValueBox({
     req(nrow(l51()) > 0)
     chg <- l51()$chg_pct
-    if (length(chg) == 0 || is.na(chg)) chg <- 0  # 避免 NA 導致顏色崩潰
+    if (length(chg) == 0 || is.na(chg)) {
+      return(valueBox("—", "0050 日漲跌幅（資料異常）", icon = icon("exclamation-triangle"), color = "yellow"))
+    }
     color_str <- ifelse(chg >= 0, "red", "green")
     icon_str <- ifelse(chg >= 0, "arrow-up", "arrow-down")
     
@@ -142,8 +173,8 @@ server <- function(input, output, session) {
              icon = icon("chart-line"),
              color = ifelse(ytd >= 0, "red", "green"))
   })
-
-  # === 圖表 (加入 req() 確保有資料才繪製) ===
+  
+  # === 圖表 ===
   output$p_price <- renderPlotly({
     req(nrow(etf()) > 0)
     plot_ly(etf(), x = ~date, y = ~adjusted, type = "scatter", mode = "lines",
@@ -151,9 +182,11 @@ server <- function(input, output, session) {
       layout(yaxis = list(title = "調整後收盤價"), xaxis = list(title = ""))
   })
   
+  # [P2] 限制近一年，加快載入速度
   output$p_ret <- renderPlotly({
     req(nrow(etf()) > 0)
-    e <- etf() %>% mutate(ret = c(NA, diff(log(adjusted))))
+    e <- etf() %>% mutate(ret = c(NA, diff(log(adjusted)))) %>%
+      filter(date >= max(date) - 365)
     plot_ly(e, x = ~date, y = ~ret, type = "bar",
             marker = list(color = ifelse(e$ret >= 0, "red", "green"))) %>%
       layout(yaxis = list(title = "日對數報酬率"), xaxis = list(title = ""))
@@ -161,7 +194,7 @@ server <- function(input, output, session) {
   
   output$p_rank <- renderPlotly({
     req(nrow(latest()) > 0)
-    rk <- latest() %>% filter(symbol != "0050") %>%
+    rk <- latest() %>% filter(symbol != "0050", !is.na(ret20)) %>%
       arrange(ret20) %>% slice(c(1:10, (n()-9):n())) %>%
       mutate(label = factor(label, levels = label))
     req(nrow(rk) > 0)
@@ -170,7 +203,30 @@ server <- function(input, output, session) {
       layout(xaxis = list(title = "近 20 日報酬率 (%)"), yaxis = list(title = ""))
   })
 
-  # === 資料表格 (修正 formatStyle 格式問題) ===
+  # === [P2] 個股走勢查詢 ===
+  pick_etf <- reactive({
+    req(nrow(df()) > 0, input$pick)
+    df() %>% filter(symbol == input$pick) %>% arrange(date)
+  })
+  
+  output$p_pick_price <- renderPlotly({
+    req(nrow(pick_etf()) > 0)
+    plot_ly(pick_etf(), x = ~date, y = ~adjusted, type = "scatter", mode = "lines",
+            line = list(color = "#1f77b4")) %>%
+      layout(yaxis = list(title = "調整後收盤價"), xaxis = list(title = ""))
+  })
+  
+  output$p_pick_ret <- renderPlotly({
+    req(nrow(pick_etf()) > 0)
+    e <- pick_etf() %>% mutate(ret = c(NA, diff(log(adjusted)))) %>%
+      filter(date >= max(date) - 365)
+    req(nrow(e) > 0)
+    plot_ly(e, x = ~date, y = ~ret, type = "bar",
+            marker = list(color = ifelse(e$ret >= 0, "red", "green"))) %>%
+      layout(yaxis = list(title = "日對數報酬率"), xaxis = list(title = ""))
+  })
+
+  # === 資料表格 ===
   output$tbl <- renderDT({
     req(nrow(latest()) > 0)
     df_tbl <- latest() %>%
@@ -184,7 +240,7 @@ server <- function(input, output, session) {
       formatStyle("漲跌幅_pct",
                   color = styleInterval(0, c("green", "red")))
   })
-
+  
   output$raw_tbl <- renderDT({
     req(nrow(df()) > 0)
     df() %>% arrange(desc(date))
