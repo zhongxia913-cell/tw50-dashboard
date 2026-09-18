@@ -36,15 +36,18 @@ jobs:
             files <- list.files(.libPaths(), pattern = "DESCRIPTION$",
                                 recursive = TRUE, full.names = TRUE)
             files <- files[grepl("/DESCRIPTION$", files)]
+            n <- 0
             for (f in files) {
+              if (file.access(f, mode = 2) != 0) next   # 跳過唯讀的系統函式庫
               x <- readLines(f, warn = FALSE)
               i <- grep("^Repository:", x)
               if (length(i) == 1) {
                 x[i] <- paste("Repository:", url)
                 writeLines(x, f)
+                n <- n + 1
               }
             }
-            cat("已改寫 DESCRIPTION 檔案數：", length(files), "\n")
+            cat("已改寫 DESCRIPTION 檔案數：", n, "\n")
           '
 
       - name: 更新資料
