@@ -38,7 +38,7 @@ jobs:
             files <- files[grepl("/DESCRIPTION$", files)]
             n <- 0
             for (f in files) {
-              if (file.access(f, mode = 2) != 0) next   # 跳過唯讀的系統函式庫
+              if (file.access(f, mode = 2) != 0) next
               x <- readLines(f, warn = FALSE)
               i <- grep("^Repository:", x)
               if (length(i) == 1) {
@@ -57,12 +57,12 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git pull --rebase origin main
           git add stock_daily.rds
           if git diff --staged --quiet; then
             echo "無新資料，跳過提交與推送。"
           else
             git commit -m "daily data update $(date +%F)"
+            git pull --rebase origin main
             git push
           fi
 
