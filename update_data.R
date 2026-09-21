@@ -1,5 +1,5 @@
 # ============================================================================
-# 每日更新（v3）：逐檔增量抓取、新成分股自動補齊歷史、自動剔除已刪除成分股
+# 每日更新（v4）：批次抓取 + 新成分股補齊歷史 + 拉長重試間隔
 # ============================================================================
 library(tidyquant); library(dplyr); library(tidyr); library(lubridate)
 
@@ -13,51 +13,62 @@ tickers <- paste0(c("0050","2330","2454","2308","2317","3711","2303","2383",
 
 rds_file <- "stock_daily.rds"
 
-if (file.exists(rds_file)) {
-  old <- readRDS(rds_file)
-} else {
-  old <- NULL
-}
-
-new_list <- list()
-for (tk in tickers) {
-  code <- substr(tk, 1, 4)
-  from_d <- if (!is.null(old) && code %in% old$symbol) {
-    max(old$date[old$symbol == code]) + 1
-  } else {
-    as.Date("2016-01-01")   # 新成分股：回溯補齊完整歷史
-  }
-  if (from_d > Sys.Date()) next
-  tmp <- NULL
-  for (i in 1:3) {
-    tmp <- tryCatch(
-      tq_get(tk, get = "stock.prices", from = from_d, to = Sys.Date()) %>%
-        mutate(symbol = substr(symbol, 1, 4)),
-      error = function(e) { cat("抓取", tk, "第", i, "次失敗：", e$message, "\n"); NULL }
+# --- 帶重試的批次抓取：失敗時依序等待 30／60／90 秒 ---
+fetch_with_retry <- function(syms, from_d, tries = 3) {
+  for (i in seq_len(tries)) {
+    res <- tryCatch(
+      tq_get(syms, get = "stock.prices", from = from_d, to = Sys.Date()),
+      error = function(e) { cat("抓取錯誤：", e$message, "\n"); NULL }
     )
-    if (!is.null(tmp) && nrow(tmp) > 0) break
-    Sys.sleep(15)
+    if (is.data.frame(res) && nrow(res) > 0) {
+      return(res %>% mutate(symbol = substr(symbol, 1, 4)))
+    }
+    cat("第", i, "次未取得有效資料，等待", 30 * i, "秒後重試...\n")
+    Sys.sleep(30 * i)
   }
-  if (!is.null(tmp) && nrow(tmp) > 0) {
-    new_list[[code]] <- tmp
-    cat(Sys.time(), "：", tk, "新增", nrow(tmp), "筆\n")
-  }
-  Sys.sleep(1)
+  return(NULL)
 }
 
-if (length(new_list) == 0) {
-  cat(Sys.time(), "：無新交易日資料（週末/國定假日），或抓取全數失敗，結束。\n")
+old <- if (file.exists(rds_file)) readRDS(rds_file) else NULL
+cur <- substr(tickers, 1, 4)
+
+if (is.null(old)) {
+  new <- fetch_with_retry(tickers, as.Date("2016-01-01"))
+} else {
+  # (1) 無歷史的新成分股（如 6446）：先補齊完整歷史
+  missing <- cur[!cur %in% unique(old$symbol)]
+  backfill <- NULL
+  if (length(missing) > 0) {
+    cat("補齊新成分股歷史：", paste(missing, collapse = ", "), "\n")
+    backfill <- fetch_with_retry(paste0(missing, ".TW"), as.Date("2016-01-01"))
+    Sys.sleep(30)
+  }
+  # (2) 每日增量：自「全部成分股中最早的缺口日」起抓（可自動修補落後個股，如 0050）
+  from_d <- old %>%
+    filter(symbol %in% cur) %>%
+    group_by(symbol) %>%
+    summarise(d = max(date), .groups = "drop") %>%
+    pull(d) %>% min() + 1
+  incr <- NULL
+  if (from_d <= Sys.Date()) {
+    incr <- fetch_with_retry(tickers, from_d)
+  }
+  new <- bind_rows(backfill, incr)
+}
+
+if (is.null(new) || nrow(new) == 0) {
+  cat(Sys.time(), "：無新交易日資料（週末/假日），或 Yahoo 仍拒絕連線，結束。\n")
   quit(save = "no")
 }
 
-new <- bind_rows(new_list) %>%
+new <- new %>%
   filter(!(is.na(open) & is.na(high) & is.na(low) & is.na(close))) %>%
   filter(!wday(date) %in% c(1, 7)) %>%
   filter(open > 0, high > 0, low > 0, close > 0) %>%
   select(symbol, date, open, high, low, close, volume, adjusted)
 
 updated <- bind_rows(old, new) %>%
-  filter(symbol %in% substr(tickers, 1, 4)) %>%   # 剔除已刪除的成分股
+  filter(symbol %in% cur) %>%            # 剔除已刪除的成分股（如 3661）
   distinct(symbol, date, .keep_all = TRUE) %>%
   arrange(symbol, date)
 
